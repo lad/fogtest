@@ -1,0 +1,249 @@
+#!/usr/bin/env ruby
+# encoding: UTF-8
+
+require 'docopt'
+require 'fogtest'
+require 'fog'
+
+class InvalidProviderException < RuntimeError; end
+class HelpException < RuntimeError; end
+class VersionException < RuntimeError; end
+
+VERSION = '0.0.1'
+SCRIPT = File.basename(__FILE__)
+
+DOC = <<DOCOPT
+Fogtest Client
+
+Usage:
+  #{SCRIPT} -p PROVIDER [-c PATH] verify-creds
+  #{SCRIPT} -p PROVIDER [-c PATH] create-instance NAME IMAGE-ID FLAVOR-ID
+  #{SCRIPT} -p PROVIDER [-c PATH] delete-instance INSTANCE-ID
+  #{SCRIPT} -p PROVIDER [-c PATH] list-images
+  #{SCRIPT} -p PROVIDER [-c PATH] list-instances
+  #{SCRIPT} -p PROVIDER [-c PATH] list-flavors
+  #{SCRIPT} -p PROVIDER [-c PATH] show-image IMAGE-ID
+  #{SCRIPT} -p PROVIDER [-c PATH] show-instance INSTANCE-ID
+  #{SCRIPT} -p PROVIDER [-c PATH] show-flavor FLAVOR-ID
+  #{SCRIPT} --version
+  #{SCRIPT} -h | --help
+
+Options:
+  -p --provider=PROVIDER  Specify either 'aws' or 'openstack'
+  -c --config=PATH        Path to your config file.
+                          If you don't specify this, sensible defaults
+                          will be assumed.
+  --version               Show version.
+  -h --help               Show this screen.
+
+Examples:
+  #{SCRIPT} verify-creds
+  #{SCRIPT} -c config.json create-instance
+  #{SCRIPT} -c config.json show-instance 616a02c2-be48-4983-a774-3f1dce85b748
+DOCOPT
+
+=begin
+
+def aws_client
+  Fog::Compute.new(provider: 'AWS',
+                   aws_access_key_id: AWS_ACCESS_KEY,
+                   aws_secret_access_key: AWS_SECRET_KEY,
+                   region: REGION)
+end
+
+def create_client
+  aws_client
+end
+
+def create_server(client = nil, wait = true)
+  client ||= create_client
+  server = client.servers.create(image_id: IMAGE_ID,
+                                 key_name: KEY_NAME,
+                                 subnet_id: SUBNET_ID,
+                                 instance_type: INSTANCE_TYPE,
+                                 private_ip_address: PRIVATE_IP_ADDRESS)
+  # This waits for the new instance ID to be known to the EC2 API. It does not
+  # wait for the instance to boot, this is just about being able to use the
+  # instance ID immediately in further calls to the EC2 API.
+  server.wait_for { ready? } if wait
+  server
+end
+
+def destroy_server(server)
+  server.destroy
+end
+
+def create_filters(tags)
+  if tags
+    fail unless tags.class == Hash
+    filters = tags.reduce({}) do |hsh, val|
+      k, v = val
+      hsh["tag:#{k}"] = v
+      hsh
+    end
+  else
+    filters = nil
+  end
+end
+
+def list_images(client = nil, tags = nil)
+  client ||= create_client
+  filters = create_filters(tags)
+  client.images.all(filters)
+end
+
+def list_instances(client = nil, tags = nil)
+  client ||= create_client
+  filters = create_filters(tags)
+  client.servers.all(filters)
+end
+
+=end
+
+# Application runner
+class App
+  def self.main
+    App.new(DOC).run
+    return 0
+  rescue HelpException
+    puts DOC
+    return 0
+  rescue VersionException
+    puts VERSION
+    return 0
+  rescue InvalidProviderException
+    puts "Invalid provider specified. Please specify one of: " \
+         "#{Fogtest::Provider::NAMES.join(', ')}"
+    return 1
+  rescue Fogtest::ConnectException
+    puts 'Failed to connect'
+    return 1
+  rescue Fogtest::NoSuchId
+    puts 'Failed to find the given ID'
+    return 1
+  rescue ::Docopt::Exit => e
+    puts e.message
+    return 1
+  rescue StandardError => e
+    puts 'Something went seriously wrong. Please submit a bug report and quote ' \
+         "this message and the following information:\n\n"
+    puts e.class.name
+    puts e.message
+    puts e.backtrace.join("\n")
+    return 1
+  end
+
+  def initialize(usage)
+    @opts = Docopt.docopt(usage, help: false)
+    fail HelpException if @opts['--help']
+    fail VersionException if @opts['--version']
+
+    @config = load_config
+    @cmds = [:verify_creds, :create_instance, :delete_instance,
+             :list_images, :list_instances, :list_flavors,
+             :show_image, :show_instance, :show_flavor]
+  end
+
+  def verify_creds
+    puts 'Credentials verified'
+  end
+
+  def create_instance
+    instance = provider.create_instance(@opts['NAME'],
+                                        @opts['IMAGE-ID'],
+                                        @opts['FLAVOR-ID'])
+    printf("%s %s\n", instance.name, instance.id)
+  end
+
+  def delete_instance
+    provider.delete_instance(@opts['INSTANCE-ID'])
+  end
+
+  def list_images
+    puts 'Images:'
+    provider.list_images.each do |image|
+      printf("%s %s\n", image.name, image.id)
+    end
+  end
+
+  def list_instances
+    puts 'Instances:'
+    provider.list_instances.each do |instance|
+      printf("%s %s\n", instance.name, instance.id)
+    end
+  end
+
+  def list_flavors
+    puts 'Flavors:'
+    provider.list_flavors.each do |flavor|
+      printf("%s %s\n", flavor.name, flavor.id)
+    end
+  end
+
+  def show_image
+    image = provider.get_image(@opts['IMAGE-ID'])
+    printf("%s %s\n", image.name, image.id)
+    if image.metadata.empty?
+      puts "  No metadata"
+    else
+      image.metadata.each do |md|
+        printf("  %s = %s\n", md.key, md.value)
+      end
+    end
+    require 'pry'; binding.pry
+  end
+
+  def show_instance
+    instance = provider.get_instance(@opts['INSTANCE-ID'])
+    printf("%s %s %s\n", instance.name, instance.id, instance.created)
+  end
+
+  def show_flavor
+    flavor = provider.get_flavor(@opts['FLAVOR-ID'])
+    printf("%s %s %d %d\n", flavor.name, flavor.id, flavor.ram, flavor.vcpus)
+  end
+
+  def run
+    @cmds.find do |cmd, fn|
+      arg = cmd.to_s.gsub('_', '-')
+      if @opts[arg]
+        fail Docopt::Exit, "No method for '#{arg}' command" unless self.respond_to? cmd
+        return send(cmd)
+      end
+    end
+    fail 'No such command'
+  end
+
+  private
+
+  def load_config
+    config_path = @opts['--config'] || default_config_path
+    conf = JSON.load(File.read(config_path))
+    path = File.expand_path(conf[provider_name]['auth'])
+    conf['auth'] = JSON.load(File.read(path))
+    conf
+  end
+
+  def default_config_path
+    File.join(File.dirname(__FILE__), '..', 'etc', 'config.json')
+  end
+
+  def provider_name
+    @_provider_name ||= begin
+      prov = @opts['--provider']
+      fail InvalidProviderException unless %w(openstack aws).include? prov
+      prov
+    end
+  end
+
+  def provider
+    @_provider ||= begin
+                     conf = @config[provider_name].merge(@config['auth'])
+                     prov = Fogtest::Provider.create(provider_name, conf)
+                     prov.connect
+                     prov
+                   end
+  end
+end
+
+exit App.main

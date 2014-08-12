@@ -1,0 +1,18 @@
+{
+  "openstack":
+    {
+      "auth":                 "~/.wpc_credentials",
+      "openstack_tenant":     "skynet",
+      "openstack_auth_url":   "http://10.52.80.221:5000/v2.0/tokens",
+      "key_name":             "dev-msw",
+      "instance_type":        "m1.medium"
+    },
+
+  "aws":
+    {
+      "auth":                 "~/.aws_credentials",
+      "subnet_id":            "subnet-7993b93f",
+      "region":               "us-west-1",
+      "private_ip_address":   "10.220.24.99"
+    }
+}

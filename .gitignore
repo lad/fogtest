@@ -1,0 +1,7 @@
+.bundle
+build
+tags
+*.swp
+*.gem
+.rdoc
+.ctags
