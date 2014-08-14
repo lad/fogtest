@@ -42,64 +42,6 @@ Examples:
   #{SCRIPT} -c config.json show-instance 616a02c2-be48-4983-a774-3f1dce85b748
 DOCOPT
 
-=begin
-
-def aws_client
-  Fog::Compute.new(provider: 'AWS',
-                   aws_access_key_id: AWS_ACCESS_KEY,
-                   aws_secret_access_key: AWS_SECRET_KEY,
-                   region: REGION)
-end
-
-def create_client
-  aws_client
-end
-
-def create_server(client = nil, wait = true)
-  client ||= create_client
-  server = client.servers.create(image_id: IMAGE_ID,
-                                 key_name: KEY_NAME,
-                                 subnet_id: SUBNET_ID,
-                                 instance_type: INSTANCE_TYPE,
-                                 private_ip_address: PRIVATE_IP_ADDRESS)
-  # This waits for the new instance ID to be known to the EC2 API. It does not
-  # wait for the instance to boot, this is just about being able to use the
-  # instance ID immediately in further calls to the EC2 API.
-  server.wait_for { ready? } if wait
-  server
-end
-
-def destroy_server(server)
-  server.destroy
-end
-
-def create_filters(tags)
-  if tags
-    fail unless tags.class == Hash
-    filters = tags.reduce({}) do |hsh, val|
-      k, v = val
-      hsh["tag:#{k}"] = v
-      hsh
-    end
-  else
-    filters = nil
-  end
-end
-
-def list_images(client = nil, tags = nil)
-  client ||= create_client
-  filters = create_filters(tags)
-  client.images.all(filters)
-end
-
-def list_instances(client = nil, tags = nil)
-  client ||= create_client
-  filters = create_filters(tags)
-  client.servers.all(filters)
-end
-
-=end
-
 # Application runner
 class App
   def self.main
@@ -161,14 +103,17 @@ class App
 
   def list_images
     puts 'Images:'
-    provider.list_images.each do |image|
+    images = provider.list_images
+    images.each do |image|
       printf("%s %s\n", image.name, image.id)
     end
   end
 
   def list_instances
     puts 'Instances:'
-    provider.list_instances.each do |instance|
+    instances = provider.list_instances
+    instances.each do |instance|
+      # No .name on AWS
       printf("%s %s\n", instance.name, instance.id)
     end
   end
@@ -190,7 +135,6 @@ class App
         printf("  %s = %s\n", md.key, md.value)
       end
     end
-    require 'pry'; binding.pry
   end
 
   def show_instance
